@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string id="AppName">Grade with Color</string>
+    <string id="SmoothingTitle">坡度平滑</string>
+    <string id="SmoothingDesc">坡度计算累计窗口</string>
+    <string id="StartThrTitle">起步阈值</string>
+    <string id="StartThrDesc">多大坡度开始变色</string>
+    <string id="Zone1Title">缓坡上限</string>
+    <string id="Zone2Title">中坡上限</string>
+    <string id="Zone3Title">陡坡上限</string>
+    <string id="Zone4Title">极陡下限</string>
+</resources>

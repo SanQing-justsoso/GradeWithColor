@@ -1,0 +1,28 @@
+<settings xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://developer.garmin.com/downloads/connect-iq/resources.xsd">
+
+    <setting propertyKey="@Properties.Smoothing" title="@Strings.SmoothingTitle">
+        <settingConfig type="list">
+            <listEntry value="30">快速 (30m)</listEntry>
+            <listEntry value="50">平衡 (50m)</listEntry>
+            <listEntry value="80">平滑 (80m)</listEntry>
+        </settingConfig>
+    </setting>
+
+    <setting propertyKey="@Properties.StartThr" title="@Strings.StartThrTitle">
+        <settingConfig type="numeric"/>
+    </setting>
+
+    <setting propertyKey="@Properties.Zone1Max" title="@Strings.Zone1Title">
+        <settingConfig type="numeric"/>
+    </setting>
+    <setting propertyKey="@Properties.Zone2Max" title="@Strings.Zone2Title">
+        <settingConfig type="numeric"/>
+    </setting>
+    <setting propertyKey="@Properties.Zone3Max" title="@Strings.Zone3Title">
+        <settingConfig type="numeric"/>
+    </setting>
+    <setting propertyKey="@Properties.Zone4Max" title="@Strings.Zone4Title">
+        <settingConfig type="numeric"/>
+    </setting>
+
+</settings>

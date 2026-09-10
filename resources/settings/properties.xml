@@ -1,0 +1,15 @@
+<properties xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://developer.garmin.com/downloads/connect-iq/resources.xsd">
+
+    <!-- 坡度平滑：累计窗口米数（list 值），越大越平滑/反应越慢 -->
+    <property id="Smoothing" type="number">50</property>
+
+    <!-- 起步阈值：多大坡度才算上坡变色（%） -->
+    <property id="StartThr" type="number">1</property>
+
+    <!-- 分档阈值：4 个上坡分档边界（%） -->
+    <property id="Zone1Max" type="number">3</property>
+    <property id="Zone2Max" type="number">6</property>
+    <property id="Zone3Max" type="number">9</property>
+    <property id="Zone4Max" type="number">13</property>
+
+</properties>
