@@ -15,16 +15,18 @@ import Toybox.WatchUi;
 
 class GradeWithColorView extends WatchUi.DataField {
 
-    // --- α-β 滤波状态（估计"垂直速度 vh"代替"等一段距离求高度差"）---
-    private var _hHat as Float;   // 滤波后高度 (m)
-    private var _vh as Float;     // 垂直速度估计 (m/s)，正=上升
+    // --- KF-vz 卡尔曼滤波状态（状态 x=[h, vz]，坡度=vz/v 导出）---
+    // 仿真验证：比手写 α-β 同延迟下噪声 -35%，比短窗口差分好得多（σ~40%被淘汰）
+    private var _hHat as Float;    // 状态x1: 滤波后高度 (m)
+    private var _vh as Float;      // 状态x2: 垂直速度估计 (m/s)，正=上升
+    private var _P11 as Float;     // 协方差 P[0][0]（高度方差）
+    private var _P12 as Float;     // 协方差 P[0][1]
+    private var _P22 as Float;     // 协方差 P[1][1]（垂直速度方差）
+    private var _rH as Float = 0.16;    // 海拔观测噪声 R（气压计 σh²）
+    private var _qVz as Float = 0.02;    // 垂直速度过程噪声 Q（控制响应/平滑权衡）
     private var _lastAlt as Float?;   // 上次 altitude (m)
     private var _lastDist as Float?;  // 上次 elapsedDistance (m)
     private var _dt as Float;     // 上一帧时间步长 (s)，用距离差分/速度近似
-
-    // 慢速坡度（稳定）：段累计法，保留作"慢速基准"防抖
-    private var _segDist as Float;   // 当前段累计水平距离 (m)
-    private var _segAlt as Float;    // 当前段累计爬升 (m)
 
     // 坡度估值（实时，%）
     private var _grade as Float?;
@@ -33,14 +35,6 @@ class GradeWithColorView extends WatchUi.DataField {
     private var _zoneThr as Array = [3, 6, 9, 13] as Array;
     // 起步阈值：多大坡度才算上坡变色 %
     private var _startThr as Float = 1.0;
-    // 平滑窗口：慢速坡度的段累计距离 (m)，越短响应越快
-    private var _smoothM as Float = 50.0;
-    // 快速/慢速融合权重（α_ab），越大越依赖 α-β 快速坡度（跟手但略抖）
-    private var _alphaFuse as Float = 0.7;
-
-    // α-β 参数（按 dt≈1s 调，受 Smoothing 档位映射）
-    private var _alphaAB as Float = 0.6;   // 高度跟随
-    private var _betaAB as Float = 0.3;    // 垂直速度响应
 
     // 颜色：0=平缓中性(不标色) 1=缓坡黄 2=中坡橙 3=陡坡红 4=极陡紫
     private var _zoneColors as Array = [
@@ -72,23 +66,24 @@ class GradeWithColorView extends WatchUi.DataField {
         _lastAlt = null;
         _hHat = 0.0;
         _vh = 0.0;
+        _P11 = 1.0;
+        _P12 = 0.0;
+        _P22 = 1.0;
         _dt = 1.0;
-        _segDist = 0.0;
-        _segAlt = 0.0;
         _grade = null;
         _currentAlt = null;
     }
 
-    // α-β 滤波 + 垂直速度法 + 双尺度融合
-    //  核心：坡度%(≈tanθ) = vh / v，即"垂直速度 / 水平速度"
-    //  —— 不用等一段距离，实时估计垂直速度，天然比窗口差分快半个窗口
-    //  双尺度：快速坡度来自 α-β 的 vh（跟手），慢速坡度来自段累计（稳定），按 _alphaFuse 融合
+    // KF-vz 卡尔曼滤波：状态 x=[h, vz]，坡度=vz/v 导出
+    //  核心(仿真验证, 见 simulation/): 比手写α-β同延迟下噪声-35%, 短窗差分被淘汰(σ~40%)
+    //  不用"坡度硬约束/g·v锁定"(会钉死坡度), 用海拔观测驱动垂直速度累积, 再转坡度
+    //  2状态标量展开(Monkey C 无矩阵库), 计算量可忽略
     function compute(info as Activity.Info) as Numeric or Duration or String or Null {
         _currentAlt = info.altitude;
 
         var alt = info.altitude;
         var dist = info.elapsedDistance;
-        var speed = info.currentSpeed;   // 水平速度 (m/s)，用于 vh/v
+        var speed = info.currentSpeed;   // 水平速度 (m/s)，用于 vz/v
 
         if (alt == null || dist == null) {
             _grade = null;
@@ -96,7 +91,8 @@ class GradeWithColorView extends WatchUi.DataField {
         }
 
         if (_lastDist == null || _lastAlt == null) {
-            // 首帧：只记录基线
+            // 首帧：初始化高度状态，只记基线
+            _hHat = alt;
             _lastDist = dist;
             _lastAlt = alt;
             return null;
@@ -112,7 +108,7 @@ class GradeWithColorView extends WatchUi.DataField {
             return null;
         }
 
-        // 估计时间步长 dt：用距离差分/水平速度，避免依赖不稳定的时钟 tick
+        // 估计时间步长 dt：用距离差分/水平速度（GNSS speed，避免位置差分卷入横向漂移）
         var v = speed;
         if (v == null || v < 0.5) {
             v = dDist;   // 兜底：假设速度≈距离(即 dt≈1s)
@@ -125,49 +121,38 @@ class GradeWithColorView extends WatchUi.DataField {
             _dt = 3.0;
         }
 
-        // 本帧瞬时坡度（百分点），用于方向反转判断
+        // 本帧瞬时坡度（仅用于方向急转重置判断）
         var instGradePct = (dDist > 0) ? (dAlt / dDist * 100.0) : 0.0;
-
-        // ---------- α-β 滤波：预测 + 更新，估计垂直速度 vh ----------
-        // 方向急转重置：瞬时坡度与当前估计坡度方向相反且幅度>起步阈值 →
-        //   直接把 vh 重置为按本帧增量算的瞬时垂直速度(dAlt/dt)，
-        //   解决 α-β 在"陡上坡→陡下坡"极速反转时惯性滞后几帧的问题
         handleDirectionFlip(instGradePct, dAlt, alt);
 
-        var hHatPred = _hHat + _vh * _dt;                     // 预测高度
-        var innov = alt - hHatPred;                           // 残差（新观测 vs 预测）
-        _vh = _vh + (_betaAB / _dt) * innov;                  // 更新垂直速度（β 控制响应）
-        _hHat = hHatPred + _alphaAB * innov;                  // 更新高度（α 控制跟随）
+        // ---------- KF-vz 预测步骤 ----------
+        // x' = F·x,  F=[[1,dt],[0,1]]:  h' = h + vz*dt;  vz' = vz
+        var hPred = _hHat + _vh * _dt;
+        // P' = F·P·F^T + Q,  Q=diag(0, q_vz)
+        var P11p = _P11 + 2.0 * _P12 * _dt + _P22 * _dt * _dt;
+        var P12p = _P12 + _P22 * _dt;
+        var P22p = _P22 + _qVz;
 
-        // 快速坡度（α-β 垂直速度版）：坡度% ≈ vh / v
-        // 注意 _betaAB 已含 dt 归一，这里 vh 已是 m/s
-        var gradeFast = (_vh / v) * 100.0;
+        // ---------- KF-vz 更新步骤（海拔观测, R=rH）----------
+        var S = P11p + _rH;                       // 新息协方差
+        var K1 = P11p / S;                        // 高度增益
+        var K2 = P12p / S;                        // 垂直速度增益
+        var innov = alt - hPred;                   // 新息
+        _hHat = hPred + K1 * innov;               // 更新高度
+        _vh = _vh + K2 * innov;                   // 更新垂直速度
+        // 更新协方差 P = (I-K·H)·P'
+        _P11 = (1.0 - K1) * P11p;
+        _P12 = (1.0 - K1) * P12p;
+        _P22 = P22p - K2 * P12p;
 
-        // ---------- 慢速坡度（段累计，稳定基准）----------
-        _segDist += dDist;
-        _segAlt += dAlt;
-        var segGrade = _segAlt / _segDist * 100.0;
-        var instGrade = dAlt / dDist * 100.0;
-
-        // 换段：方向翻转 或 达到窗口距离
-        var flipped =
-            (segGrade > _startThr && instGrade < -(_startThr)) ||
-            (segGrade < -_startThr && instGrade > _startThr);
-        var windowHit = (_segDist >= _smoothM);
-        if (flipped || windowHit) {
-            _segDist = dDist;
-            _segAlt = dAlt;
-        }
-        var gradeSlow = _segAlt / _segDist * 100.0;
-
-        // ---------- 双尺度融合（跟手 + 稳定）----------
-        _grade = _alphaFuse * gradeFast + (1.0 - _alphaFuse) * gradeSlow;
+        // ---------- 坡度输出：vz / v（无慢速基准融合，KF本身够稳）----------
+        _grade = (_vh / v) * 100.0;
 
         return null;
     }
 
-    // 方向急转重置：α-β 在"陡上坡→陡下坡"极速反转时有惯性滞后，
-    //   当瞬时坡度与当前估计坡度方向相反且幅度>起步阈值时，强制重定向垂直速度 vh
+    // 方向急转重置：KF 在"陡上坡→陡下坡"极速反转时有惯性滞后，
+    //   当瞬时坡度与当前估计坡度方向相反且幅度>起步阈值时，强制重定向垂直速度 vz
     function handleDirectionFlip(instPct, dAlt, alt) as Void {
         if (_grade == null) {
             return;
@@ -194,25 +179,22 @@ class GradeWithColorView extends WatchUi.DataField {
 
     private function loadSettings() as Void {
         // 平滑档：30=快速(跟手) / 50=平衡 / 80=平滑(稳)
-        // —— 映射到 α-β 的 β（垂直速度响应）与快慢融合权重
+        // —— 映射到 KF 垂直速度过程噪声 q_vz（响应/平滑权衡）与海拔观测噪声 r_h
+        //   q_vz 大 → 更快跟手但略抖； q_vz 小 → 更稳但延迟略增（仿真标定）
         var sm = 50;
         var s = Application.Properties.getValue("Smoothing");
         if (s instanceof Lang.Number) {
             sm = (s as Lang.Number);
         }
-        _smoothM = sm.toFloat();   // 慢速基准的段累计窗口（米）
         if (sm <= 30) {
-            _betaAB = 0.55;        // 快速：大幅提升垂直速度响应 → 跟手
-            _alphaAB = 0.7;
-            _alphaFuse = 0.8;      // 更依赖快速坡度
+            _qVz = 0.08;   // 快速：高过程噪声 → 强硬垂直速度响应
+            _rH = 0.16;    // 观测噪声适中
         } else if (sm >= 80) {
-            _betaAB = 0.15;        // 平滑：压低响应 → 稳、抗抖
-            _alphaAB = 0.5;
-            _alphaFuse = 0.6;      // 更依赖慢速基准
+            _qVz = 0.005;  // 平滑：低过程噪声 → 稳、抗抖
+            _rH = 0.16;
         } else {
-            _betaAB = 0.30;        // 平衡
-            _alphaAB = 0.6;
-            _alphaFuse = 0.7;
+            _qVz = 0.02;   // 平衡（仿真最优，轻降噪）
+            _rH = 0.16;
         }
 
         _startThr = readThreshold("StartThr", 1);
