@@ -334,16 +334,31 @@ class GradeWithColorView extends WatchUi.DataField {
         var gradeDesc = Graphics.getFontDescent(gradeFont);
         var gradeY = baseline - (gradeAsc - gradeDesc) / 2;
 
+        // --- 标题 "Grade"（小字，水平居中，大/小格子都显示，字号按格高自适应防溢出）---
+        var titleFont = Graphics.FONT_SMALL;
+        var titleY = h * 46 / 100;                 // 大/中格：中上（比原略下移避开上框）
+        if (h >= 100) {
+            titleFont = Graphics.FONT_MEDIUM;
+            titleY = h * 46 / 100;
+        } else if (h < 65) {
+            titleFont = Graphics.FONT_SMALL;       // 超小格：下移到 h*20%，避开上边框
+            titleY = h * 20 / 100;
+        }
+        dc.setColor(_neutralFg, Graphics.COLOR_TRANSPARENT);
+        dc.drawText(w / 2, titleY, titleFont,
+            "Grade",
+            Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
+
         // 整串水平居中
         dc.setColor(fgDisp, Graphics.COLOR_TRANSPARENT);
         dc.drawText(w / 2, gradeY, gradeFont,
             gradeDisp,
             Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
 
-        // --- 右上角：当前海拔 (小字，中性色) 位置与 BiggerSpeed 右上角一致 ---
+        // --- 右上角：当前海拔 (小字，中性色) 位置右移，略靠右不贴边框 ---
         var altText = formatAlt(_currentAlt);
         dc.setColor(_altFg, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(w * 75 / 100, h * 28 / 100, altFont,
+        dc.drawText(w * 85 / 100, h * 28 / 100, altFont,
             altText,
             Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
     }
