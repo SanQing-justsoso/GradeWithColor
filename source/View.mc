@@ -52,7 +52,6 @@ class GradeWithColorView extends WatchUi.DataField {
     ] as Array;
 
     private var _currentAlt as Float?;  // 当前海拔 (m)
-    private var _unit as String;        // 坡度单位 %
     private var _altUnit as String;     // 海拔单位
 
     // 主题感知配色（昼夜两套，onUpdate 开头按码表夜间模式切换）
@@ -66,7 +65,6 @@ class GradeWithColorView extends WatchUi.DataField {
 
         var settings = System.getDeviceSettings();
         var isMetric = (settings.paceUnits == System.UNIT_METRIC);
-        _unit = "%";
         _altUnit = isMetric ? "m" : "ft";
 
         // 初始未定位
@@ -127,7 +125,15 @@ class GradeWithColorView extends WatchUi.DataField {
             _dt = 3.0;
         }
 
+        // 本帧瞬时坡度（百分点），用于方向反转判断
+        var instGradePct = (dDist > 0) ? (dAlt / dDist * 100.0) : 0.0;
+
         // ---------- α-β 滤波：预测 + 更新，估计垂直速度 vh ----------
+        // 方向急转重置：瞬时坡度与当前估计坡度方向相反且幅度>起步阈值 →
+        //   直接把 vh 重置为按本帧增量算的瞬时垂直速度(dAlt/dt)，
+        //   解决 α-β 在"陡上坡→陡下坡"极速反转时惯性滞后几帧的问题
+        handleDirectionFlip(instGradePct, dAlt, alt);
+
         var hHatPred = _hHat + _vh * _dt;                     // 预测高度
         var innov = alt - hHatPred;                           // 残差（新观测 vs 预测）
         _vh = _vh + (_betaAB / _dt) * innov;                  // 更新垂直速度（β 控制响应）
@@ -158,6 +164,22 @@ class GradeWithColorView extends WatchUi.DataField {
         _grade = _alphaFuse * gradeFast + (1.0 - _alphaFuse) * gradeSlow;
 
         return null;
+    }
+
+    // 方向急转重置：α-β 在"陡上坡→陡下坡"极速反转时有惯性滞后，
+    //   当瞬时坡度与当前估计坡度方向相反且幅度>起步阈值时，强制重定向垂直速度 vh
+    function handleDirectionFlip(instPct, dAlt, alt) as Void {
+        if (_grade == null) {
+            return;
+        }
+        var curG = _grade.toFloat();
+        var flippedUp = (curG > _startThr && instPct < -_startThr);   // 上坡突然变下坡
+        var flippedDown = (curG < -_startThr && instPct > _startThr); // 下坡突然变上坡
+        if (flippedUp || flippedDown) {
+            // 按本帧增量重置垂直速度：dAlt / dt（m/s）
+            _vh = dAlt / _dt;
+            _hHat = alt;   // 高度对齐本轮观测
+        }
     }
 
     // ---------- 设置 ----------
@@ -272,14 +294,9 @@ class GradeWithColorView extends WatchUi.DataField {
         dc.setColor(bg, bg);
         dc.clear();
 
-        // 字号：坡度大字（放大——用比 HOT 更大的 THAI_HOT），海拔小字
-        var gradeFont = Graphics.FONT_NUMBER_THAI_HOT;
+        // 字号：海拔小字
         var altFont = Graphics.FONT_XTINY;
-        if (h < 65) {
-            gradeFont = Graphics.FONT_NUMBER_MEDIUM;
-            altFont = Graphics.FONT_XTINY;
-        } else if (h < 100) {
-            gradeFont = Graphics.FONT_NUMBER_HOT;
+        if (h >= 100) {
             altFont = Graphics.FONT_SMALL;
         }
 
@@ -288,23 +305,46 @@ class GradeWithColorView extends WatchUi.DataField {
         if (grade == null || _currentAlt == null) {
             // 未定位：中性色大字 "--"
             dc.setColor(_neutralFg, Graphics.COLOR_TRANSPARENT);
-            dc.drawText(w / 2, h / 2, gradeFont,
+            dc.drawText(w / 2, h / 2, Graphics.FONT_NUMBER_HOT,
                 "--",
                 Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
             return;
         }
 
-        // --- 坡度数字（大字，整数+小数+% 统一字号，居中单行）---
-        // "4.6" 或 "-4.2" → 拼成 "4.6 %" 大字整体显示
-        var gradeText = formatGrade(grade);   // 如 "4.6" 或 "-4.2"
-        var gradeDisp = gradeText + " " + _unit;  // "4.6 %"
+        // --- 坡度数字（大字，"xx.x%" 整串水平居中）---
+        var gradeText = formatGrade(grade);   // 如 "4.6" / "-15.5"
+        var gradeDisp = gradeText + "%";      // "4.6%" / "-15.5%"
 
         // 档位颜色：上坡才标色，下坡/平路用中性色
         var zi = zoneIndex(grade);
         var gradeColor = _zoneColors[zi];
-        var isClimb = (zi > 0);   // 只有上坡超过起步阈值才有环法色
+        var isClimb = (zi > 0);
         var showColor = isClimb;
         var fgDisp = showColor ? gradeColor : _neutralFg;
+
+        // 字号阶梯（从大到小），宽度不够时逐级降，防小格溢出
+        var fonts = [Graphics.FONT_NUMBER_THAI_HOT, Graphics.FONT_NUMBER_HOT,
+                     Graphics.FONT_NUMBER_MEDIUM, Graphics.FONT_NUMBER_MILD, Graphics.FONT_SMALL] as Array;
+        // 按格高粗选起始档（大格用最大，小格直接用中档，再由宽度细调）
+        var startIdx = 0;
+        if (h < 65) {
+            startIdx = 2;             // 超小格：从中号起
+        } else if (h < 100) {
+            startIdx = 1;             // 中格：从 HOT 起
+        }
+        var gradeFont = fonts[startIdx];
+        // 宽度预算：整串 ≤ 格宽 92%（留边）
+        var availW = w * 92 / 100;
+        var i = startIdx;
+        while (i < fonts.size()) {
+            var f = fonts[i];
+            var txtW = dc.getTextWidthInPixels(gradeDisp, f);
+            if (txtW <= availW) {
+                gradeFont = f;
+                break;
+            }
+            i++;
+        }
 
         // 底部 baseline（大字统一一行）
         var baseline = h * 86 / 100;
@@ -312,16 +352,16 @@ class GradeWithColorView extends WatchUi.DataField {
         var gradeDesc = Graphics.getFontDescent(gradeFont);
         var gradeY = baseline - (gradeAsc - gradeDesc) / 2;
 
-        // 大字居中绘制（整体居中，让坡度更大更突出）
+        // 整串水平居中
         dc.setColor(fgDisp, Graphics.COLOR_TRANSPARENT);
         dc.drawText(w / 2, gradeY, gradeFont,
             gradeDisp,
             Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
 
-        // --- 右上角：当前海拔 (小字，中性色) 位置平衡：略靠右不贴边，往下避开顶框 ---
+        // --- 右上角：当前海拔 (小字，中性色) 位置与 BiggerSpeed 右上角一致 ---
         var altText = formatAlt(_currentAlt);
         dc.setColor(_altFg, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(w * 80 / 100, h * 14 / 100, altFont,
+        dc.drawText(w * 75 / 100, h * 28 / 100, altFont,
             altText,
             Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
     }
