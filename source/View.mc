@@ -50,8 +50,7 @@ class GradeWithColorView extends WatchUi.DataField {
 
     // 主题感知配色（昼夜两套，onUpdate 开头按码表夜间模式切换）
     private var _bg as Number = 0x000000;        // 背景色
-    private var _neutralFg as Number = 0xFFFFFF; // 中性坡度字色（平路/下坡）
-    private var _altFg as Number = 0xCCCCCC;     // 海拔字色
+    private var _neutralFg as Number = 0xFFFFFF; // 中性坡度字色（平路/下坡）/title/海拔同色
 
     function initialize() {
         DataField.initialize();
@@ -235,14 +234,30 @@ class GradeWithColorView extends WatchUi.DataField {
         return (r * 299 + g * 587 + b * 114) / 1000;
     }
 
+    // 绘制标题 "Grade"（未定位和正常状态都调用）
+    // 字号按格高自适应防溢出；位置已下移避开上边框
+    function drawGradeTitle(dc, w, h) as Void {
+        var titleFont = Graphics.FONT_SMALL;
+        var titleY = h * 46 / 100;                 // 大/中格：中上
+        if (h >= 100) {
+            titleFont = Graphics.FONT_MEDIUM;
+        } else if (h < 65) {
+            titleFont = Graphics.FONT_SMALL;       // 超小格：下移到 h*20%，避开上边框
+            titleY = h * 20 / 100;
+        }
+        dc.setColor(_neutralFg, Graphics.COLOR_TRANSPARENT);
+        dc.drawText(w / 2, titleY, titleFont,
+            "Grade",
+            Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
+    }
+
     // 按码表夜间模式切换整套配色（每天 onUpdate 开头调用，运行中切模式即生效）
     function applyTheme() as Void {
         var settings = System.getDeviceSettings();
         // isNightModeEnabled 在 API 4.1.2+；运行时判断字段存在防旧设备崩溃
         if (settings has :isNightModeEnabled && settings.isNightModeEnabled) {
             _bg = 0x000000;          // 夜间深底
-            _neutralFg = 0xFFFFFF;   // 中性字白
-            _altFg = 0xCCCCCC;       // 海拔浅灰
+            _neutralFg = 0xFFFFFF;   // 中性字白/title/海拔
             _zoneColors = [
                 0xFFFFFF,            // 平缓（中性白）
                 0xFFFF00,            // 缓坡 亮黄
@@ -252,8 +267,7 @@ class GradeWithColorView extends WatchUi.DataField {
             ] as Array;
         } else {
             _bg = 0xF0F0F0;          // 白天浅底（贴 Garmin off-white 默认）
-            _neutralFg = 0x1A1A1A;   // 中性字深灰（浅底可读）
-            _altFg = 0x555555;       // 海拔中灰
+            _neutralFg = 0x1A1A1A;   // 中性字深灰（浅底可读）/title/海拔
             _zoneColors = [
                 0x1A1A1A,            // 平缓（中性深灰）
                 0x8A6D00,            // 缓坡 深琥珀（浅底可读）
@@ -284,11 +298,21 @@ class GradeWithColorView extends WatchUi.DataField {
 
         var grade = _grade;
 
+        // 标题 "Grade" 都显示（未定位也显示，只是数值不同）
+        drawGradeTitle(dc, w, h);
+
         if (grade == null || _currentAlt == null) {
-            // 未定位：中性色大字 "--"
+            // 未定位：中性色大字 "--" + 右上角海拔占位 "--"
             dc.setColor(_neutralFg, Graphics.COLOR_TRANSPARENT);
-            dc.drawText(w / 2, h / 2, Graphics.FONT_NUMBER_HOT,
+            dc.drawText(w / 2, h * 86 / 100 - Graphics.getFontAscent(Graphics.FONT_NUMBER_HOT) / 2,
+                Graphics.FONT_NUMBER_HOT,
                 "--",
+                Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
+            // 海拔占位（formatAlt 对 null 返回 "--"）颜色与 title 一致
+            var altPh = formatAlt(_currentAlt);
+            dc.setColor(_neutralFg, Graphics.COLOR_TRANSPARENT);
+            dc.drawText(w * 85 / 100, h * 28 / 100, altFont,
+                altPh,
                 Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
             return;
         }
@@ -334,30 +358,15 @@ class GradeWithColorView extends WatchUi.DataField {
         var gradeDesc = Graphics.getFontDescent(gradeFont);
         var gradeY = baseline - (gradeAsc - gradeDesc) / 2;
 
-        // --- 标题 "Grade"（小字，水平居中，大/小格子都显示，字号按格高自适应防溢出）---
-        var titleFont = Graphics.FONT_SMALL;
-        var titleY = h * 46 / 100;                 // 大/中格：中上（比原略下移避开上框）
-        if (h >= 100) {
-            titleFont = Graphics.FONT_MEDIUM;
-            titleY = h * 46 / 100;
-        } else if (h < 65) {
-            titleFont = Graphics.FONT_SMALL;       // 超小格：下移到 h*20%，避开上边框
-            titleY = h * 20 / 100;
-        }
-        dc.setColor(_neutralFg, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(w / 2, titleY, titleFont,
-            "Grade",
-            Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
-
         // 整串水平居中
         dc.setColor(fgDisp, Graphics.COLOR_TRANSPARENT);
         dc.drawText(w / 2, gradeY, gradeFont,
             gradeDisp,
             Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
 
-        // --- 右上角：当前海拔 (小字，中性色) 位置右移，略靠右不贴边框 ---
+        // --- 右上角：当前海拔 (小字) 颜色与 title/Grade 标题一致 ---
         var altText = formatAlt(_currentAlt);
-        dc.setColor(_altFg, Graphics.COLOR_TRANSPARENT);
+        dc.setColor(_neutralFg, Graphics.COLOR_TRANSPARENT);
         dc.drawText(w * 85 / 100, h * 28 / 100, altFont,
             altText,
             Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
